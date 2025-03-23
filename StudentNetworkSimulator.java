@@ -144,6 +144,9 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // the data in such a message is delivered in-order, and correctly, to
     // the receiving upper layer.
     protected void aOutput(Message message) {
+        // debug msg
+        System.out.println("aOutput(): called");
+        System.out.println("Upper Layer msg: " + message.getData());
         // check if window full
         if (nextSeqNum >= base + WindowSize) {
             System.out.println("Error: window es full, so packet not sent.");
@@ -180,6 +183,8 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // arrives at the A-side. "packet" is the (possibly corrupted) packet
     // sent from the B-side.
     protected void aInput(Packet packet) {
+        // debug print
+        System.out.println("aInput(): called");
         // corrupt check
         int computedChecksum = getChecksum(packet.getPayload(), packet.getSeqnum(), packet.getAcknum());
         if (computedChecksum != packet.getChecksum()) {
@@ -199,10 +204,8 @@ public class StudentNetworkSimulator extends NetworkSimulator {
             }
 
             // restart timer if there are still unacknowledged packets in window
-            if (base < nextSeqNum) {
-                stopTimer(0);
-                startTimer(0, RxmtInterval);
-            } else {
+            // edit: ??
+            if (base >= nextSeqNum) {
                 stopTimer(0);
             }
         }
@@ -214,16 +217,23 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // the retransmission of packets. See startTimer() and stopTimer(), above,
     // for how the timer is started and stopped.
     protected void aTimerInterrupt() {
+        // debug msg
+        System.out.println("aTimerInterrupt(): called");
         // retransmit all unacked packets in window if timer runs out
+        // edit: retransmit first unacked packet
         for (int i = base; i < nextSeqNum; i++) {
             if (!ackReceived[i % WindowSize]) {
                 toLayer3(0, window[i % WindowSize]);
+                System.out.println("aTimerInterrupt(): Retransmitting seqnum: " + window[i % WindowSize].getSeqnum()
+                        + "  acknum: " + window[i % WindowSize].getAcknum() + "  checksum: "
+                        + window[i % WindowSize].getChecksum()
+                        + "  payload: " + window[i % WindowSize].getPayload());
                 retransmissions++;
             }
+            break;
         }
 
-        // restart the timer after retransmission (do we need to stop timer here?)
-        stopTimer(0);
+        // start the timer after retransmission, no need to stop bc already stopped
         startTimer(0, RxmtInterval);
     }
 
@@ -248,6 +258,7 @@ public class StudentNetworkSimulator extends NetworkSimulator {
 
         // debug print
         System.out.println("bInput(): B getting " + packet.getPayload());
+
         // check if ack is correct
         // check if packet is corrupt
         // check buffer and see if incorrect ack can be buffered
@@ -256,10 +267,11 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         // corrupt check
         int computedChecksum = getChecksum(packet.getPayload(), packet.getSeqnum(), packet.getAcknum());
         if (computedChecksum != packet.getChecksum()) {
-            System.out.println("bInput(): got corrupted ACK/NAK");
+            // System.out.println("bInput(): got corrupted ACK/NAK");
             corruptedPackets++;
             return;
         }
+        System.out.println("bInput(): expecting pkt " + expectedSeqNum + ", getting pkt " + packet.getSeqnum());
 
         // check if packet is in expected window
         if (packet.getSeqnum() >= expectedSeqNum && packet.getSeqnum() < expectedSeqNum + WindowSize) {
