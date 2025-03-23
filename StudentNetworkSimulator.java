@@ -103,7 +103,6 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     private int nextSeqNum; // seq num for next packet to be sent
     private Packet[] window; // buffer for packets in current window
     private boolean[] ackReceived; // tracking packets that have been ack'd
-    private double[] timers; // timers for each packet in le window
 
     // variables for B
     private int expectedSeqNum; // seq for next expected packet
@@ -131,14 +130,13 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         RxmtInterval = delay;
     }
 
-    public int getChecksum(String data, int seq, int ack) {
-        // calculates the checksum
-        return 1;
-    }
-
-    public boolean isCorrupted(Packet packet) {
-        // finds out if packet is corrupted
-        return false;
+    private int getChecksum(String data, int seq, int ack) {
+        // calcs checksum using seq, ack, and data
+        int checksum = seq + ack;
+        for (char c : data.toCharArray()) {
+            checksum += (int) c;
+        }
+        return checksum;
     }
 
     // This routine will be called whenever the upper layer at the sender [A]
@@ -146,30 +144,35 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // the data in such a message is delivered in-order, and correctly, to
     // the receiving upper layer.
     protected void aOutput(Message message) {
-        if (nextSeqNum < base + WindowSize) {
-            // create packet based on the msg and next sequence number
-            String data = message.getData();
-            int seq = nextSeqNum;
-            int ack = -1;
-            int checksum = getChecksum(data, seq, ack);
-            Packet packet = new Packet(seq, ack, checksum, data);
-            window[nextSeqNum % WindowSize] = packet;
-            ackReceived[nextSeqNum % WindowSize] = false;
-            timers[nextSeqNum % WindowSize] = getTime();
-
-            // send packet to layer 3
-            toLayer3(0, packet);
-            originalPacketsSent++;
-
-            // start timer for this packet
-            startTimer(0, RxmtInterval);
-
-            // go to next seq num
-            nextSeqNum++;
-        } else {
-            // full window alert
+        // check if window full
+        if (nextSeqNum >= base + WindowSize) {
             System.out.println("Error: window es full, so packet not sent.");
+            return;
         }
+
+        // if not full then create packet based on the msg and next sequence number
+
+        String data = message.getData();
+        int seq = nextSeqNum;
+        int ack = -1;
+        int checksum = getChecksum(data, seq, ack);
+        Packet packet = new Packet(seq, ack, checksum, data);
+
+        // buffer the packet
+        window[nextSeqNum % WindowSize] = packet;
+        ackReceived[nextSeqNum % WindowSize] = false;
+
+        // send packet to layer 3
+        toLayer3(0, packet);
+        originalPacketsSent++;
+
+        // restart timer: stop current timer, and start timer for this packet
+        stopTimer(0);
+        startTimer(0, RxmtInterval);
+
+        // go to next seq num
+        nextSeqNum++;
+
     }
 
     // This routine will be called whenever a packet sent from the B-side
@@ -177,9 +180,10 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // arrives at the A-side. "packet" is the (possibly corrupted) packet
     // sent from the B-side.
     protected void aInput(Packet packet) {
-        // check ack and see if it's "correct". if not then timer continues
         // corrupt check
-        if (isCorrupted(packet)) {
+        int computedChecksum = getChecksum(packet.getPayload(), packet.getSeqnum(), packet.getAcknum());
+        if (computedChecksum != packet.getChecksum()) {
+            System.out.println("aInput(): got corrupted ACK/NAK");
             corruptedPackets++;
             return;
         }
@@ -189,8 +193,16 @@ public class StudentNetworkSimulator extends NetworkSimulator {
             // slide window forward to acknowledged sequence number + 1
             base = packet.getAcknum() + 1;
 
-            // stop timer for all acknowledged packets
+            // mark all packets up to ACKed seq num as ack'd
             for (int i = base; i <= packet.getAcknum(); i++) {
+                ackReceived[i % WindowSize] = true;
+            }
+
+            // restart timer if there are still unacknowledged packets in window
+            if (base < nextSeqNum) {
+                stopTimer(0);
+                startTimer(0, RxmtInterval);
+            } else {
                 stopTimer(0);
             }
         }
@@ -207,9 +219,12 @@ public class StudentNetworkSimulator extends NetworkSimulator {
             if (!ackReceived[i % WindowSize]) {
                 toLayer3(0, window[i % WindowSize]);
                 retransmissions++;
-                startTimer(0, RxmtInterval);
             }
         }
+
+        // restart the timer after retransmission (do we need to stop timer here?)
+        stopTimer(0);
+        startTimer(0, RxmtInterval);
     }
 
     // This routine will be called once, before any of your other A-side
@@ -221,7 +236,6 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         nextSeqNum = FirstSeqNo;
         window = new Packet[WindowSize];
         ackReceived = new boolean[WindowSize];
-        timers = new double[WindowSize];
         originalPacketsSent = 0;
         retransmissions = 0;
     }
@@ -232,13 +246,17 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     // sent from the A-side.
     protected void bInput(Packet packet) {
 
+        // debug print
+        System.out.println("bInput(): B getting " + packet.getPayload());
         // check if ack is correct
         // check if packet is corrupt
         // check buffer and see if incorrect ack can be buffered
         // send to layer5 if all is good
 
-        // check if checksum is correct for corruptness
-        if (isCorrupted(packet)) {
+        // corrupt check
+        int computedChecksum = getChecksum(packet.getPayload(), packet.getSeqnum(), packet.getAcknum());
+        if (computedChecksum != packet.getChecksum()) {
+            System.out.println("bInput(): got corrupted ACK/NAK");
             corruptedPackets++;
             return;
         }
@@ -257,6 +275,15 @@ public class StudentNetworkSimulator extends NetworkSimulator {
             }
 
             // send a cumulative ACK for highest inorder sequence number
+            String data = "";
+            int seq = expectedSeqNum - 1;
+            int ack = -1;
+            int checksum = getChecksum(data, seq, ack);
+            Packet ackPacket = new Packet(-1, expectedSeqNum - 1, checksum, data);
+            toLayer3(1, ackPacket);
+            ackPacketsSent++;
+        } else if (packet.getSeqnum() < expectedSeqNum) {
+            // dupe packet, drop and send cumulative ACK
             String data = "";
             int seq = expectedSeqNum - 1;
             int ack = -1;
@@ -289,8 +316,10 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         System.out.println("Number of ACK packets sent by B:" + ackPacketsSent);
         System.out.println("Number of corrupted packets:" + corruptedPackets);
         System.out.println(
-                "Ratio of lost packets:" + (double) (originalPacketsSent - dataPacketsDelivered) / originalPacketsSent);
-        System.out.println("Ratio of corrupted packets:" + (double) corruptedPackets / originalPacketsSent);
+                "Ratio of lost packets:" + (double) (retransmissions - corruptedPackets) /
+                        (originalPacketsSent + retransmissions + ackPacketsSent));
+        System.out.println("Ratio of corrupted packets:" + (double) corruptedPackets /
+                (originalPacketsSent + retransmissions + ackPacketsSent - (retransmissions - corruptedPackets)));
         System.out.println("Average RTT:" + "<YourVariableHere>");
         System.out.println("Average communication time:" + "<YourVariableHere>");
         System.out.println("==================================================");
