@@ -114,6 +114,12 @@ public class StudentNetworkSimulator extends NetworkSimulator {
     private int dataPacketsDelivered; // num of data packets delivered to layer 5 from B
     private int ackPacketsSent; // num of ack packets sent from B
     private int corruptedPackets; // num of corrupted packets
+    private HashMap<Integer, Double> packetSendTimes; // maps seq nums to send time
+    private double totalRTT; // sum of RTTs
+    private int rttCount; // RTT count for dividing
+    private HashMap<Integer, Double> packetSendTimes2; // same except includes retransmissions
+    private double totalTime; // total time regardless of retransmit
+    private int timeCount; // count for dividing for total time
 
     // This is the constructor. Don't touch!
     public StudentNetworkSimulator(int numMessages,
@@ -169,6 +175,10 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         toLayer3(0, packet);
         originalPacketsSent++;
 
+        // store starting time for RTT
+        packetSendTimes.put(seq, getTime());
+        packetSendTimes2.put(seq, getTime());
+
         // restart timer: stop current timer, and start timer for this packet
         stopTimer(0);
         startTimer(0, RxmtInterval);
@@ -195,6 +205,33 @@ public class StudentNetworkSimulator extends NetworkSimulator {
 
         // check if packet is cumulative ack
         if (packet.getAcknum() >= base && packet.getAcknum() < nextSeqNum) {
+
+            // if the packet not retransmitted, calc RTT
+            if (packetSendTimes.containsKey(packet.getAcknum())) {
+                double sendTime = packetSendTimes.get(packet.getAcknum());
+                double ackTime = getTime();
+                double rtt = ackTime - sendTime;
+
+                // update total RTT and count
+                totalRTT += rtt;
+                rttCount++;
+
+                // remove packet from send times map to avoid dupes
+                packetSendTimes.remove(packet.getAcknum());
+            }
+            // if the packet not retransmitted, calc total time
+            if (packetSendTimes2.containsKey(packet.getAcknum())) {
+                double sendTime = packetSendTimes2.get(packet.getAcknum());
+                double ackTime = getTime();
+                double time = ackTime - sendTime;
+
+                // update total time and count
+                totalTime += time;
+                timeCount++;
+
+                // remove packet from send times map to avoid dupes
+                packetSendTimes2.remove(packet.getAcknum());
+            }
             // slide window forward to acknowledged sequence number + 1
             base = packet.getAcknum() + 1;
 
@@ -203,8 +240,7 @@ public class StudentNetworkSimulator extends NetworkSimulator {
                 ackReceived[i % WindowSize] = true;
             }
 
-            // restart timer if there are still unacknowledged packets in window
-            // edit: ??
+            // only stop timer if base >= next sequence number
             if (base >= nextSeqNum) {
                 stopTimer(0);
             }
@@ -223,6 +259,8 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         // edit: retransmit first unacked packet
         for (int i = base; i < nextSeqNum; i++) {
             if (!ackReceived[i % WindowSize]) {
+                // remove packet from packetSendTimes to exclude from RTT calculation
+                packetSendTimes.remove(window[i % WindowSize].getSeqnum());
                 toLayer3(0, window[i % WindowSize]);
                 System.out.println("aTimerInterrupt(): Retransmitting seqnum: " + window[i % WindowSize].getSeqnum()
                         + "  acknum: " + window[i % WindowSize].getAcknum() + "  checksum: "
@@ -248,6 +286,16 @@ public class StudentNetworkSimulator extends NetworkSimulator {
         ackReceived = new boolean[WindowSize];
         originalPacketsSent = 0;
         retransmissions = 0;
+
+        // for calculating avg RTT
+        packetSendTimes = new HashMap<>();
+        totalRTT = 0.0;
+        rttCount = 0;
+
+        // for calculating total time
+        packetSendTimes2 = new HashMap<>();
+        totalTime = 0.0;
+        timeCount = 0;
     }
 
     // This routine will be called whenever a packet sent from the B-side
@@ -332,8 +380,9 @@ public class StudentNetworkSimulator extends NetworkSimulator {
                         (originalPacketsSent + retransmissions + ackPacketsSent));
         System.out.println("Ratio of corrupted packets:" + (double) corruptedPackets /
                 (originalPacketsSent + retransmissions + ackPacketsSent - (retransmissions - corruptedPackets)));
-        System.out.println("Average RTT:" + "<YourVariableHere>");
-        System.out.println("Average communication time:" + "<YourVariableHere>");
+        System.out.println("Average RTT:" + ((rttCount > 0) ? (totalRTT / rttCount) : 0.0));
+        System.out.println("Average communication time:"
+                + ((timeCount > 0) ? (totalTime / timeCount) : 0.0));
         System.out.println("==================================================");
 
         // PRINT YOUR OWN STATISTIC HERE TO CHECK THE CORRECTNESS OF YOUR PROGRAM
