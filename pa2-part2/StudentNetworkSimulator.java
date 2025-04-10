@@ -131,7 +131,7 @@ public class StudentNetworkSimulator extends NetworkSimulator {
             double delay) {
         super(numMessages, loss, corrupt, avgDelay, trace, seed);
         WindowSize = winsize;
-        LimitSeqNo = winsize * 2;
+        LimitSeqNo = winsize * 2; // set appropriately; assumes SR here!
         RxmtInterval = delay;
     }
 
